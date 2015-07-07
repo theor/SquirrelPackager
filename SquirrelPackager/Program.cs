@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Fclp;
 using LibGit2Sharp;
+using Newtonsoft.Json;
 using NuGet;
 using FileMode = System.IO.FileMode;
 using Version = System.Version;
@@ -22,9 +23,8 @@ namespace SquirrelPackager
         public string Version { get; set; }
         public string ReleaseDir { get; set; }
         public string LocalRepo { get; set; }
-        public string GitRepo { get; set; }
-        public string GitUsername { get; set; }
-        public string GitPassword { get; set; }
+
+        public string SquirrelPackage { get; set; }
     }
     class Program
     {
@@ -33,14 +33,14 @@ namespace SquirrelPackager
             var p = new FluentCommandLineParser<Options>();
 
             p.Setup(o => o.Version).As('v', "version");
-            p.Setup(o => o.NuSpec).As('t', "nuspec").Required();
+            p.Setup(o => o.NuSpec).As('t', "nuspec");
             p.Setup(o => o.NugetExe).As('n',"nuget");
             p.Setup(o => o.SquirrelCom).As('s', "squirrel");
             p.Setup(o => o.ReleaseDir).As('r', "releasedir");
             p.Setup(o => o.LocalRepo).As("localrepo");
-            p.Setup(o => o.GitRepo).As("repo");
-            p.Setup(o => o.GitUsername).As("gitusername");
-            p.Setup(o => o.GitPassword).As("gitpassword");
+
+            p.Setup(o => o.SquirrelPackage).As('p',"package");
+
             p.SetupHelp("?", "help").Callback(text => Console.WriteLine(text));
 
             ICommandLineParserResult res = p.Parse(args);
@@ -50,24 +50,37 @@ namespace SquirrelPackager
                 p.HelpOption.ShowHelp(p.Options);
                 return 1;
             }
-            if (!File.Exists(p.Object.NuSpec))
+
+            var options = p.Object;
+            if (options.SquirrelPackage != null)
             {
-                Console.WriteLine("{0} does not exist", p.Object.NuSpec);
+                if (!File.Exists(options.SquirrelPackage))
+                {
+                    Console.WriteLine("Squirrel Package file '{0}' does not exist");
+                    return 1;
+                }
+                JsonConvert.PopulateObject(File.ReadAllText(options.SquirrelPackage), options);
+                Environment.CurrentDirectory = Path.GetDirectoryName(options.SquirrelPackage);
+            }
+
+            //File.WriteAllText("squirrel.json", JsonConvert.SerializeObject(p.Object, Formatting.Indented));
+            if (!File.Exists(options.NuSpec))
+            {
+                Console.WriteLine("{0} does not exist", options.NuSpec);
                 return 1;
             }
-            if (p.Object.NugetExe == null)
-                p.Object.NugetExe = FindFile(p.Object.NuSpec, ".nuget\\NuGet.exe");
-            if (p.Object.SquirrelCom == null)
-                p.Object.SquirrelCom = FindFile(p.Object.NuSpec, "squirrel.com");
-            if (p.Object.ReleaseDir == null)
-                p.Object.ReleaseDir = Path.GetFullPath(".");
-            if (!File.Exists(p.Object.NugetExe))
+            if (options.NugetExe == null)
+                options.NugetExe = FindFile(options.NuSpec, ".nuget\\NuGet.exe");
+            if (options.SquirrelCom == null)
+                options.SquirrelCom = FindFile(options.NuSpec, "squirrel.com");
+            if (options.ReleaseDir == null)
+                options.ReleaseDir = Path.GetFullPath(".");
+            if (!File.Exists(options.NugetExe))
             {
                 Console.WriteLine("NuGet.exe not found");
                 return 1;
             }
 
-            Options options = p.Object;
             Manifest m;
             using(var fileStream = File.OpenRead(options.NuSpec))
                 m = Manifest.ReadFrom(fileStream, false);
@@ -83,7 +96,7 @@ namespace SquirrelPackager
             using (var repo = new Repository(options.LocalRepo))
             {
                 var st = repo.RetrieveStatus();
-                var toCommit = st.Untracked.Concat(st.Modified).Select(x => x.FilePath).ToList();
+                var toCommit = st.Untracked.Concat(st.Modified).Select(x => x.FilePath).Where(f => f.Contains("Releases")).ToList();
 
                 if (toCommit.Any())
                 {
