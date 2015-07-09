@@ -30,7 +30,7 @@ namespace SquirrelPackager
     {
         static int Main(string[] args)
         {
-            var p = new FluentCommandLineParser<Options>();
+            FluentCommandLineParser<Options> p = new FluentCommandLineParser<Options>();
 
             p.Setup(o => o.Version).As('v', "version");
             p.Setup(o => o.NuSpec).As('t', "nuspec");
@@ -51,7 +51,7 @@ namespace SquirrelPackager
                 return 1;
             }
 
-            var options = p.Object;
+            Options options = p.Object;
             if (options.SquirrelPackage != null)
             {
                 if (!File.Exists(options.SquirrelPackage))
@@ -82,52 +82,54 @@ namespace SquirrelPackager
             }
 
             Manifest m;
-            using(var fileStream = File.OpenRead(options.NuSpec))
+            using(FileStream fileStream = File.OpenRead(options.NuSpec))
                 m = Manifest.ReadFrom(fileStream, false);
-            var newVersion = SetPackageVersion(options, m);
-            var nupkg = CreatePackage(options, m);
-            var sqpkg = CreateSquirrelRelease(options, nupkg);
-            var pushres = PushReleasesToGithub(options, newVersion);
+            Version newVersion = SetPackageVersion(options, m);
+
+            WriteJekyllRelease(options, newVersion);
+            string nupkg = CreatePackage(options, m);
+            string sqpkg = CreateSquirrelRelease(options, nupkg);
+            object pushres = PushReleasesToGithub(options, newVersion);
             return 0;
         }
 
+        private const string MarkdownTemplate = @"---
+layout: post
+title: v{0}
+date: {1}
+categories: release
+---
+";
+
+        private static void WriteJekyllRelease(Options options, Version newVersion)
+        {
+            var dateTime = DateTime.Now.ToString("yyyy-MM-dd");
+            string text = String.Format(MarkdownTemplate, newVersion.ToString(3), dateTime);
+            var format = string.Format("{0}-v{1}.markdown", dateTime, newVersion.ToString(3));
+            File.WriteAllText(Path.Combine(options.LocalRepo, "_posts", format), text);
+        }
         private static object PushReleasesToGithub(Options options, Version newVersion)
         {
-            using (var repo = new Repository(options.LocalRepo))
+            using (Repository repo = new Repository(options.LocalRepo))
             {
-                var st = repo.RetrieveStatus();
-                var toCommit = st.Untracked.Concat(st.Modified).Select(x => x.FilePath).Where(f => f.Contains("Releases")).ToList();
+                RepositoryStatus st = repo.RetrieveStatus();
+                List<string> toCommit = st.Untracked.Concat(st.Modified).Select(x => x.FilePath).Where(f => f.Contains("Releases")).ToList();
 
                 if (toCommit.Any())
                 {
                     repo.Stage(toCommit);
-                    var st2 = repo.RetrieveStatus();
-                    var commit = repo.Commit("Release v." + newVersion);
+                    RepositoryStatus st2 = repo.RetrieveStatus();
+                    Commit commit = repo.Commit("Release v." + newVersion);
                 }
-                var pushed = RunProcess("git", "push origin master", options.LocalRepo);
-                //var origin = repo.Network.Remotes["origin"];
-                //repo.Network.Fetch(origin);
-                //var branch = repo.Branches["master"];
-                //var pushOptions = new PushOptions
-                //{
-                //    CredentialsProvider =
-                //        (url, fromUrl, types) =>
-                //            new UsernamePasswordCredentials
-                //            {
-                //                Username = options.GitUsername,
-                //                Password = options.GitPassword
-                //            }
-                //};
-                //repo.Network.Push(origin, "refs/heads/master", pushOptions);
-                //repo.Network.Push(branch, pushOptions);
             }
+            bool pushed = RunProcess("git", "push origin master", options.LocalRepo);
             return null;
         }
 
         private static Assembly FindAssembly(Options options, Manifest manifest)
         {
-            var id = manifest.Metadata.Id;
-            var asmf = manifest.Files.FirstOrDefault(f => Path.GetFileName(f.Source) == id + ".exe");
+            string id = manifest.Metadata.Id;
+            ManifestFile asmf = manifest.Files.FirstOrDefault(f => Path.GetFileName(f.Source) == id + ".exe");
             if (asmf == null)
                 return null;
             string fullPath = Path.Combine(Path.GetDirectoryName(options.NuSpec), asmf.Source);
@@ -136,16 +138,16 @@ namespace SquirrelPackager
 
         private static string CreateSquirrelRelease(Options options, string nupkg)
         {
-            var p = RunProcess(options.SquirrelCom, string.Format("--releasify \"{0}\" --releaseDir=\"{1}\"", nupkg, options.ReleaseDir));
+            bool p = RunProcess(options.SquirrelCom, string.Format("--releasify \"{0}\" --releaseDir=\"{1}\"", nupkg, options.ReleaseDir));
             return null;
         }
         private static string CreatePackage(Options options, Manifest m)
         {
-            var expectedPackage = string.Format("{0}.{1}.nupkg", m.Metadata.Id, m.Metadata.Version);
+            string expectedPackage = string.Format("{0}.{1}.nupkg", m.Metadata.Id, m.Metadata.Version);
 
             TryDelete(expectedPackage);
 
-            var p = RunProcess(options.NugetExe, string.Format("pack \"{0}\"", options.NuSpec));
+            bool p = RunProcess(options.NugetExe, string.Format("pack \"{0}\"", options.NuSpec));
             return p && File.Exists(expectedPackage) ? expectedPackage : null;
             //.nuget\NuGet.exe pack NewOrder\NewOrder.nuspec
         }
@@ -169,12 +171,12 @@ namespace SquirrelPackager
             else
             {
 
-                var asm = FindAssembly(options, m);
+                Assembly asm = FindAssembly(options, m);
                 v2 = asm.GetName().Version;
             }
 
             m.Metadata.Version = v2.ToString();
-            using (var fileStream = File.Open(options.NuSpec, FileMode.Truncate))
+            using (FileStream fileStream = File.Open(options.NuSpec, FileMode.Truncate))
                 m.Save(fileStream, true);
             return v2;
         }
@@ -209,14 +211,14 @@ namespace SquirrelPackager
             int exitCode;
             List<string> output = new List<string>();
             List<string> errors = new List<string>();
-            var r = RunProcess(filename, args, out exitCode, output, errors, workingDir);
+            bool r = RunProcess(filename, args, out exitCode, output, errors, workingDir);
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            foreach (var line in output)
+            foreach (string line in output)
             {
                 Console.WriteLine(line);
             }
             Console.ForegroundColor = ConsoleColor.Red;
-            foreach (var line in errors)
+            foreach (string line in errors)
             {
                 Console.WriteLine(line);
             }
@@ -236,7 +238,7 @@ namespace SquirrelPackager
                 CreateNoWindow = true,
                 WorkingDirectory = workingDir ?? "",
             };
-            var proc = Process.Start(psi);
+            Process proc = Process.Start(psi);
             Debug.Assert(proc != null, "proc != null");
             if (output != null)
             {
